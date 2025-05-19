@@ -13,7 +13,7 @@
 你可以直接 Clone 本项目进行开发，但是我们建议你复制一份作为你的模板。
 
 ```bash
-npx digit cipherpuzzles/ccxc-engine-puzzle-template your-project-name
+npx degit cipherpuzzles/ccxc-engine-puzzle-template your-project-name
 cd your-project-name
 npm install
 ```
