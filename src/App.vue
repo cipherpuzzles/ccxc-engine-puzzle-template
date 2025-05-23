@@ -36,6 +36,8 @@
 // 动态导入所有谜题
 const puzzleModules = import.meta.glob('./puzzles/*.vue');
 
+import { markRaw } from 'vue';
+
 export default {
   name: 'App',
   data() {
@@ -67,9 +69,9 @@ export default {
         const puzzleInfo = this.puzzles.find(p => p.name === this.selectedPuzzle);
         if (!puzzleInfo) return;
         
-        // 动态导入谜题组件
+        // 动态导入谜题组件，使用 markRaw 防止组件被转换为响应式对象
         const module = await puzzleModules[puzzleInfo.path]();
-        this.currentPuzzleComponent = module.default;
+        this.currentPuzzleComponent = markRaw(module.default);
       } catch (error) {
         console.error('加载谜题失败:', error);
         this.currentPuzzleComponent = null;
