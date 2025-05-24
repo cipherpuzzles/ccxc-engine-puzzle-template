@@ -20,11 +20,20 @@ npm install
 
 ### 开发谜题
 
+**开发前准备**
+
+先编辑 `.env.development` 和 `.env.production` 。将其中的环境变量 `VITE_BACKEND_ROOT` 指向项目后端访问的路径。（注：将`/v1/`之前的部分全部填入`VITE_BACKEND_ROOT`）
+
+
 运行 Dev Server 开发服务器
 
 ```bash
 npm run dev
 ```
+
+必须通过 HTTPS 访问服务器。因此第一次运行开发服务器时，你会被安装 mkcert 的根证书用于自签证书。 mkcert 的根证书、网站证书均在你的本地生成，请放心安装。详情请查看 [Mkcert主页](http://mkcert.dev)。
+
+**开发步骤**
 
 1. 在`src/puzzles`目录中创建新的`.vue`文件
 2. 每个`.vue`文件代表一个独立的谜题组件
@@ -54,7 +63,9 @@ export default {
 </script>
 ```
 
-你可以在开发时使用第三方库，但是要使用 `npm install {库名称} --save` 安装。
+你可以查看项目中自带的几个例子了解题目组件开发方式。
+
+你可以在开发时使用 `npm install --save` 安装第三方库。在 `dependencies` 中的第三方库会被打包到最终文件中。
 
 在构建时，所有用到的第三方库均会打包到一个文件中。
 
