@@ -53,6 +53,8 @@ export default {
         //初始化同步
         const yDoc = ySync.yDoc;
         const yMap = yDoc.getMap(YSYNC_KEY); //yMap是同步的主体。它是一个key-value的map，其中每个key是同步最小单位。每个key的改变都会向其他终端发布同步广播，并保证数据的最终一致性。
+
+        console.log("yMap", yMap);
   
         //在取得yMap对象后，我们需要用它来还原我们的数据源d。
         //对于数据源中的每一行，我们都以“t-{行号}”这样的key存在yMap里。所以这里我们遍历每一行，检查yMap中是否存在相同的key。

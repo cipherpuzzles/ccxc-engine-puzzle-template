@@ -90,7 +90,7 @@ export async function fetchPostWithSign(url, data, type = "normal") {
     }
 
     return request.request({
-        url,
+        url: "/v1" + url,
         method: "POST",
         data
     });

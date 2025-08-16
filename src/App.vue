@@ -20,6 +20,30 @@
       </div>
     </header>
 
+    <!-- 同步状态显示区域 -->
+    <div class="sync-status-bar" v-if="isLoggedIn">
+      <div class="status-item">
+        <span class="status-label">连接状态：</span>
+        <span :class="['status-value', syncStatus.connected ? 'connected' : 'disconnected']">
+          {{ syncStatus.connected ? '已连接' : '未连接' }}
+        </span>
+      </div>
+      <div class="status-item">
+        <span class="status-label">同步状态：</span>
+        <span :class="['status-value', syncStatus.synced ? 'synced' : 'not-synced']">
+          {{ syncStatus.synced ? '已同步' : '未同步' }}
+        </span>
+      </div>
+      <div class="status-item" v-if="syncStatus.retries > 0">
+        <span class="status-label">重连次数：</span>
+        <span class="status-value retry-count">{{ syncStatus.retries }}</span>
+      </div>
+      <div class="status-item" v-if="syncStatus.errorMessage">
+        <span class="status-label">错误信息：</span>
+        <span class="status-value error-message">{{ syncStatus.errorMessage }}</span>
+      </div>
+    </div>
+
     <div v-if="showUserDialog" class="dialog-overlay" @click="showUserDialog = false">
       <div class="dialog-content" @click.stop>
         <h3>用户信息</h3>
@@ -64,206 +88,216 @@
   </div>
 </template>
 
-<script>
+<script setup>
 // 动态导入所有谜题
 const puzzleModules = import.meta.glob('./puzzles/*.vue');
 
-import { markRaw } from 'vue';
+import { ref, markRaw, onMounted, onBeforeUnmount } from 'vue';
 import ySyncDocs from './previewComponents/ySyncDocs';
 
-export default {
-  name: 'App',
-  data() {
-    return {
-      puzzles: [],
-      selectedPuzzle: '',
-      currentPuzzleComponent: null,
-      isLoggedIn: false,
-      currentUser: {
-        uid: '',
-        username: '',
-        roleid: '',
-        token: '',
-        sk: '',
-        etc: '',
-        color: ''
-      },
-      showUserDialog: false,
-      showErrorDialog: false,
-      errorMessage: '',
-      errorCode: ''
+// 响应式数据
+const puzzles = ref([]);
+const selectedPuzzle = ref('');
+const currentPuzzleComponent = ref(null);
+const isLoggedIn = ref(false);
+const currentUser = ref({
+  uid: '',
+  username: '',
+  roleid: '',
+  token: '',
+  sk: '',
+  etc: '',
+  color: ''
+});
+const showUserDialog = ref(false);
+const showErrorDialog = ref(false);
+const errorMessage = ref('');
+const errorCode = ref('');
+const teamGid = ref('');
+
+// 引用 ySyncDocs 的状态
+const syncStatus = ySyncDocs.status;
+
+// 方法
+const loadPuzzle = async () => {
+  if (!selectedPuzzle.value) return;
+  
+  try {
+    // 查找当前选择的谜题
+    const puzzleInfo = puzzles.value.find(p => p.name === selectedPuzzle.value);
+    if (!puzzleInfo) return;
+    
+    // 动态导入谜题组件，使用 markRaw 防止组件被转换为响应式对象
+    const module = await puzzleModules[puzzleInfo.path]();
+    currentPuzzleComponent.value = markRaw(module.default);
+  } catch (error) {
+    console.error('加载谜题失败:', error);
+    currentPuzzleComponent.value = null;
+  }
+};
+
+const reloadPuzzle = () => {
+  // 重新加载当前谜题
+  currentPuzzleComponent.value = null;
+  setTimeout(() => {
+    loadPuzzle();
+  }, 100);
+};
+
+// 检查本地存储中的登录状态
+const checkLoginStatus = () => {
+  const token = localStorage.getItem('userToken');
+  const username = localStorage.getItem('username');
+  
+  if (token && username) {
+    isLoggedIn.value = true;
+    currentUser.value = {
+      uid: localStorage.getItem('uid') || '',
+      username: localStorage.getItem('username') || '',
+      roleid: localStorage.getItem('roleid') || '',
+      token: localStorage.getItem('userToken') || '',
+      sk: localStorage.getItem('sk') || '',
+      etc: localStorage.getItem('etc') || '',
+      color: localStorage.getItem('color') || ''
+    };
+    
+    // 设置默认的teamGid为当前用户的uid
+    teamGid.value = 1;
+    
+    // 如果用户已登录，连接ySyncDocs
+    ySyncDocs.connect(token, teamGid.value);
+  }
+};
+
+// 处理登录
+const handleLogin = async () => {
+  try {
+    // 获取SSO登录服务器地址
+    const backendRoot = import.meta.env.VITE_BACKEND_ROOT;
+    const response = await fetch(`${backendRoot}/v1/get-sso-prefix`);
+    const result = await response.json();
+    
+    if (result.prefix) {
+      const redirectUrl = encodeURIComponent(window.location.protocol + "//" + window.location.host + "/");
+      const ssoUrl = `${result.prefix}/user/sso?app=ccxc&token=sso-from-backend&redirect=${redirectUrl}`;
+      
+      // 跳转到SSO登录页面
+      window.location.href = ssoUrl;
+    } else {
+      console.error('获取SSO地址失败');
     }
-  },
-  created() {
-    // 遍历所有谜题模块，生成谜题列表
-    this.puzzles = Object.keys(puzzleModules).map(modulePath => {
-      const name = modulePath.split('/').pop().replace('.vue', '');
-      return { name, path: modulePath };
+  } catch (error) {
+    console.error('登录失败:', error);
+  }
+};
+
+// 处理SSO登录回调
+const handleSSOCallback = () => {
+  const urlParams = new URLSearchParams(window.location.search);
+  const result = urlParams.get('result');
+  
+  if (result === 'failed') {
+    // 登录失败
+    errorMessage.value = urlParams.get('message') || '登录失败';
+    errorCode.value = urlParams.get('code') || '未知错误';
+    showErrorDialog.value = true;
+    
+    // 清理URL参数
+    clearURLParams();
+  } else if (result === 'ok') {
+    // 登录成功
+    const userData = {
+      uid: urlParams.get('uid'),
+      username: urlParams.get('username'),
+      roleid: urlParams.get('roleid'),
+      token: urlParams.get('token'),
+      sk: urlParams.get('sk'),
+      etc: urlParams.get('etc'),
+      color: urlParams.get('color')
+    };
+    
+    // 存储到localStorage
+    Object.entries(userData).forEach(([key, value]) => {
+      if (value) {
+        if (key === 'token') {
+          localStorage.setItem('userToken', value);
+        } else {
+          localStorage.setItem(key, value);
+        }
+      }
     });
     
-    // 如果有谜题，默认选择第一个
-    if (this.puzzles.length > 0) {
-      this.selectedPuzzle = this.puzzles[0].name;
-      this.loadPuzzle();
+    // 更新组件状态
+    isLoggedIn.value = true;
+    currentUser.value = userData;
+    
+    // SSO登录成功后连接ySyncDocs
+    if (userData.token) {
+      ySyncDocs.connect(userData.token);
     }
-
-    // 检查登录状态
-    this.checkLoginStatus();
-  },
-  mounted() {
-    // 处理SSO登录结果
-    this.handleSSOCallback();
-  },
-  beforeUnmount() {
-    // 页面关闭时断开连接
-    ySyncDocs.disconnect();
-  },
-  methods: {
-    async loadPuzzle() {
-      if (!this.selectedPuzzle) return;
-      
-      try {
-        // 查找当前选择的谜题
-        const puzzleInfo = this.puzzles.find(p => p.name === this.selectedPuzzle);
-        if (!puzzleInfo) return;
-        
-        // 动态导入谜题组件，使用 markRaw 防止组件被转换为响应式对象
-        const module = await puzzleModules[puzzleInfo.path]();
-        this.currentPuzzleComponent = markRaw(module.default);
-      } catch (error) {
-        console.error('加载谜题失败:', error);
-        this.currentPuzzleComponent = null;
-      }
-    },
-    reloadPuzzle() {
-      // 重新加载当前谜题
-      this.currentPuzzleComponent = null;
-      setTimeout(() => {
-        this.loadPuzzle();
-      }, 100);
-    },
-    // 检查本地存储中的登录状态
-    checkLoginStatus() {
-      const token = localStorage.getItem('userToken');
-      const username = localStorage.getItem('username');
-      
-      if (token && username) {
-        this.isLoggedIn = true;
-        this.currentUser = {
-          uid: localStorage.getItem('uid') || '',
-          username: localStorage.getItem('username') || '',
-          roleid: localStorage.getItem('roleid') || '',
-          token: localStorage.getItem('userToken') || '',
-          sk: localStorage.getItem('sk') || '',
-          etc: localStorage.getItem('etc') || '',
-          color: localStorage.getItem('color') || ''
-        };
-        
-        // 如果用户已登录，连接ySyncDocs
-        ySyncDocs.connect(token);
-      }
-    },
-    // 处理登录
-    async handleLogin() {
-      try {
-        // 获取SSO登录服务器地址
-        const backendRoot = import.meta.env.VITE_BACKEND_ROOT;
-        const response = await fetch(`${backendRoot}/v1/get-sso-prefix`);
-        const result = await response.json();
-        
-        if (result.prefix) {
-          const redirectUrl = encodeURIComponent(window.location.protocol + "//" + window.location.host + "/");
-          const ssoUrl = `${result.prefix}/user/sso?app=ccxc&token=sso-from-backend&redirect=${redirectUrl}`;
-          
-          // 跳转到SSO登录页面
-          window.location.href = ssoUrl;
-        } else {
-          console.error('获取SSO地址失败');
-        }
-      } catch (error) {
-        console.error('登录失败:', error);
-      }
-    },
-    // 处理SSO登录回调
-    handleSSOCallback() {
-      const urlParams = new URLSearchParams(window.location.search);
-      const result = urlParams.get('result');
-      
-      if (result === 'failed') {
-        // 登录失败
-        this.errorMessage = urlParams.get('message') || '登录失败';
-        this.errorCode = urlParams.get('code') || '未知错误';
-        this.showErrorDialog = true;
-        
-        // 清理URL参数
-        this.clearURLParams();
-      } else if (result === 'ok') {
-        // 登录成功
-        const userData = {
-          uid: urlParams.get('uid'),
-          username: urlParams.get('username'),
-          roleid: urlParams.get('roleid'),
-          token: urlParams.get('token'),
-          sk: urlParams.get('sk'),
-          etc: urlParams.get('etc'),
-          color: urlParams.get('color')
-        };
-        
-        // 存储到localStorage
-        Object.entries(userData).forEach(([key, value]) => {
-          if (value) {
-            if (key === 'token') {
-              localStorage.setItem('userToken', value);
-            } else {
-              localStorage.setItem(key, value);
-            }
-          }
-        });
-        
-        // 更新组件状态
-        this.isLoggedIn = true;
-        this.currentUser = userData;
-        
-        // SSO登录成功后连接ySyncDocs
-        if (userData.token) {
-          ySyncDocs.connect(userData.token);
-        }
-        
-        // 清理URL参数
-        this.clearURLParams();
-      }
-    },
+    
     // 清理URL参数
-    clearURLParams() {
-      const url = new URL(window.location);
-      url.search = '';
-      window.history.replaceState({}, document.title, url.toString());
-    },
-    // 处理退出登录
-    handleLogout() {
-      // 断开ySyncDocs连接
-      ySyncDocs.disconnect();
-      
-      // 清除localStorage中的用户信息
-      ['uid', 'username', 'roleid', 'userToken', 'sk', 'etc', 'color'].forEach(key => {
-        localStorage.removeItem(key);
-      });
-      
-      // 重置组件状态
-      this.isLoggedIn = false;
-      this.currentUser = {
-        uid: '',
-        username: '',
-        roleid: '',
-        token: '',
-        sk: '',
-        etc: '',
-        color: ''
-      };
-      this.showUserDialog = false;
-    }
+    clearURLParams();
   }
-}
+};
+
+// 清理URL参数
+const clearURLParams = () => {
+  const url = new URL(window.location);
+  url.search = '';
+  window.history.replaceState({}, document.title, url.toString());
+};
+
+// 处理退出登录
+const handleLogout = () => {
+  // 断开ySyncDocs连接
+  ySyncDocs.disconnect();
+  
+  // 清除localStorage中的用户信息
+  ['uid', 'username', 'roleid', 'userToken', 'sk', 'etc', 'color'].forEach(key => {
+    localStorage.removeItem(key);
+  });
+  
+  // 重置组件状态
+  isLoggedIn.value = false;
+  currentUser.value = {
+    uid: '',
+    username: '',
+    roleid: '',
+    token: '',
+    sk: '',
+    etc: '',
+    color: ''
+  };
+  teamGid.value = '';
+  showUserDialog.value = false;
+};
+
+// 生命周期钩子
+onMounted(() => {
+  // 遍历所有谜题模块，生成谜题列表
+  puzzles.value = Object.keys(puzzleModules).map(modulePath => {
+    const name = modulePath.split('/').pop().replace('.vue', '');
+    return { name, path: modulePath };
+  });
+  
+  // 如果有谜题，默认选择第一个
+  if (puzzles.value.length > 0) {
+    selectedPuzzle.value = puzzles.value[0].name;
+    loadPuzzle();
+  }
+
+  // 检查登录状态
+  checkLoginStatus();
+
+  // 处理SSO登录结果
+  handleSSOCallback();
+});
+
+onBeforeUnmount(() => {
+  // 页面关闭时断开连接
+  ySyncDocs.disconnect();
+});
 </script>
 
 <style>
@@ -325,6 +359,54 @@ button {
   background-color: #fff;
   min-width: 180px;
   font-size: 1rem;
+}
+
+/* 队伍模拟器样式 */
+.team-simulator {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.team-label {
+  font-weight: bold;
+  color: #606266;
+  white-space: nowrap;
+}
+
+.gid-input {
+  padding: 8px 12px;
+  border: 1px solid #dcdfe6;
+  border-radius: 4px;
+  background-color: #fff;
+  min-width: 120px;
+  font-size: 0.9rem;
+}
+
+.gid-input:focus {
+  outline: none;
+  border-color: #409eff;
+  box-shadow: 0 0 0 2px rgba(64, 158, 255, 0.2);
+}
+
+.connect-btn {
+  padding: 8px 16px;
+  background-color: #67c23a;
+  color: white;
+  border: none;
+  border-radius: 4px;
+  font-size: 0.9rem;
+  transition: background-color 0.3s;
+  white-space: nowrap;
+}
+
+.connect-btn:hover:not(:disabled) {
+  background-color: #529b2e;
+}
+
+.connect-btn:disabled {
+  background-color: #c0c4cc;
+  cursor: not-allowed;
 }
 
 /* 预览容器 */
@@ -497,6 +579,72 @@ button {
   color: #f56c6c;
 }
 
+/* 同步状态栏样式 */
+.sync-status-bar {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  padding: 10px 20px;
+  background-color: #f8f9fa;
+  border: 1px solid #e9ecef;
+  border-radius: 6px;
+  margin-bottom: 20px;
+  font-size: 0.9rem;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+}
+
+.status-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.status-label {
+  font-weight: 600;
+  color: #495057;
+}
+
+.status-value {
+  font-weight: 500;
+  padding: 2px 8px;
+  border-radius: 12px;
+  font-size: 0.85rem;
+}
+
+.status-value.connected {
+  background-color: #d4edda;
+  color: #155724;
+}
+
+.status-value.disconnected {
+  background-color: #f8d7da;
+  color: #721c24;
+}
+
+.status-value.synced {
+  background-color: #d1ecf1;
+  color: #0c5460;
+}
+
+.status-value.not-synced {
+  background-color: #fff3cd;
+  color: #856404;
+}
+
+.status-value.retry-count {
+  background-color: #e2e3e5;
+  color: #383d41;
+}
+
+.status-value.error-message {
+  background-color: #f8d7da;
+  color: #721c24;
+  max-width: 800px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 /* 响应式设计 */
 @media (max-width: 768px) {
   .app-header {
@@ -506,6 +654,34 @@ button {
   
   .puzzle-selector {
     align-self: stretch;
+  }
+  
+  .sync-status-bar {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 8px;
+  }
+  
+  .status-item {
+    width: 100%;
+    justify-content: space-between;
+  }
+  
+  .status-value.error-message {
+    max-width: none;
+    white-space: normal;
+    word-break: break-word;
+  }
+  
+  .team-simulator {
+    flex-wrap: wrap;
+    justify-content: center;
+  }
+  
+  .team-label {
+    width: 100%;
+    text-align: center;
+    margin-bottom: 8px;
   }
   
   .user-section {
